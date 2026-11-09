@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>スイカゲーム風</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@700&display=swap');
+        
+        body {
+            font-family: 'M PLUS Rounded 1c', sans-serif;
+            background: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%);
+            touch-action: none; /* スワイプによるスクロールを防止 */
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #game-container {
+            position: relative;
+            background: linear-gradient(to bottom, #ffe259, #ffa751);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2), inset 0 0 20px rgba(255,255,255,0.5);
+            border-radius: 20px;
+            overflow: hidden;
+            /* 基本サイズ比率を維持しつつ画面に収める */
+            width: 100vw;
+            max-width: 420px;
+            height: 100vh;
+            max-height: 700px;
+            display: flex;
+            flex-direction: column;
+            border: 4px solid #fff;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            pointer-events: none; /* UI部分のクリックを下のキャンバスに貫通させる */
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+            z-index: 5;
+        }
+
+        .glass-box {
+            background: rgba(255, 255, 255, 0.65);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-radius: 16px;
+            padding: 10px 20px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+            border: 2px solid rgba(255, 255, 255, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #next-fruit {
+            animation: bounce 2s infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-5px); }
+        }
+
+        /* ゲームオーバー画面 */
+        #game-over {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto; /* ボタンを押せるように */
+            z-index: 10;
+        }
+
+        .btn-restart {
+            background: linear-gradient(135deg, #ff416c, #ff4b2b);
+            color: white;
+            border: none;
+            padding: 14px 40px;
+            font-size: 1.25rem;
+            border-radius: 999px;
+            box-shadow: 0 6px 20px rgba(255, 75, 43, 0.5);
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            font-weight: bold;
+            font-family: inherit;
+        }
+
+        .btn-restart:hover {
+            transform: scale(1.05);
+            box-shadow: 0 8px 25px rgba(255, 75, 43, 0.6);
+        }
+
+        .btn-restart:active {
+            transform: scale(0.95);
+            box-shadow: 0 2px 10px rgba(255, 75, 43, 0.4);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <!-- UI層 -->
+    <div class="ui-layer">
+        <div class="glass-box">
+            <div class="text-sm text-gray-600 font-bold tracking-wider">SCORE</div>
+            <div id="score" class="text-4xl font-extrabold text-orange-600 leading-none drop-shadow-md">0</div>
+        </div>
+        <div class="glass-box">
+            <div class="text-sm text-gray-600 font-bold tracking-wider">NEXT</div>
+            <div id="next-fruit" class="text-5xl mt-1 drop-shadow-md">🍒</div>
+        </div>
+    </div>
+
+    <!-- ゲーム描画用キャンバス -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- ゲームオーバー画面 -->
+    <div id="game-over">
+        <div class="bg-white/95 p-8 rounded-3xl shadow-2xl text-center transform scale-100 transition-transform border-4 border-orange-200">
+            <h2 class="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-red-500 mb-2">GAME OVER</h2>
+            <p class="text-gray-600 mb-8 text-lg font-bold">最終スコア: <span id="final-score" class="text-orange-600 text-3xl ml-2">0</span></p>
+            <button class="btn-restart" onclick="initGame()">もう一度プレイ</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- フルーツの定義 (半径、絵文字、スコア、色) ---
+    const FRUITS = [
+        { name: 'cherry',     radius: 16,  emoji: '🍒', score: 1,  color: '#ff0800' },
+        { name: 'strawberry', radius: 24,  emoji: '🍓', score: 3,  color: '#ff0040' },
+        { name: 'grape',      radius: 34,  emoji: '🍇', score: 6,  color: '#800080' },
+        { name: 'dekopon',    radius: 44,  emoji: '🍊', score: 10, color: '#ffa500' },
+        { name: 'orange',     radius: 56,  emoji: '🍅', score: 15, color: '#ff8c00' },
+        { name: 'apple',      radius: 70,  emoji: '🍎', score: 21, color: '#ff0000' },
+        { name: 'pear',       radius: 86,  emoji: '🍐', score: 28, color: '#d1e231' },
+        { name: 'peach',      radius: 104, emoji: '🍑', score: 36, color: '#ffc0cb' },
+        { name: 'pineapple',  radius: 124, emoji: '🍍', score: 45, color: '#ffff00' },
+        { name: 'melon',      radius: 146, emoji: '🍈', score: 55, color: '#98fb98' },
+        { name: 'watermelon', radius: 170, emoji: '🍉', score: 66, color: '#008000' },
+    ];
+
+    // --- Matter.js モジュール ---
+    const Engine = Matter.Engine,
+          Render = Matter.Render,
+          Runner = Matter.Runner,
+          Bodies = Matter.Bodies,
+          Composite = Matter.Composite,
+          Events = Matter.Events;
+
+    let engine;
+    let world;
+    let runner;
+
+    // --- ゲーム設定 ---
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+    const WIDTH = 420;
+    const HEIGHT = 700;
+    const WALL_THICKNESS = 60;
+    const DEADLINE_Y = 130; // この高さを超えるとゲームオーバー判定開始
+
+    let score = 0;
+    let nextFruitLevel = 0;
+    let currentDroppingFruit = null; 
+    let dropX = WIDTH / 2;
+    let isGameOver = false;
+    let canDrop = true;
+    let particles = []; 
+    let floatingScores = [];
+
+    // DOM Elements
+    const scoreEl = document.getElementById('score');
+    const nextFruitEl = document.getElementById('next-fruit');
+    const gameOverEl = document.getElementById('game-over');
+    const finalScoreEl = document.getElementById('final-score');
+
+    // 内部解像度を設定 (高解像度ディスプレイ対応のため実際のピクセルより大きく描画)
+    canvas.width = WIDTH;
+    canvas.height = HEIGHT;
+
+    // 次のフルーツをランダムに決定 (序盤の小さなフルーツのみ)
+    function getNextFruitLevel() {
+        return Math.floor(Math.random() * 5); // 0〜4 (チェリー〜オレンジ)
+    }
+
+    function updateScore(add) {
+        score += add;
+        scoreEl.innerText = score;
+    }
+
+    // パーティクル生成 (合体時のエフェクト)
+    function createParticles(x, y, color) {
+        for (let i = 0; i < 20; i++) {
+            particles.push({
+                x: x,
+                y: y,
+                vx: (Math.random() - 0.5) * 15,
+                vy: (Math.random() - 0.5) * 15,
+                life: 1.0,
+                color: color,
+                size: Math.random() * 8 + 4
+            });
+        }
+    }
+
+    // フローティングスコア生成 (+スコアのアニメーション)
+    function createFloatingScore(x, y, scoreValue) {
+        floatingScores.push({
+            x: x,
+            y: y,
+            score: scoreValue,
+            life: 1.0,
+            vy: -2
+        });
+    }
+
+    // ゲーム初期化
+    function initGame() {
+        isGameOver = false;
+        canDrop = true;
+        score = 0;
+        updateScore(0);
+        particles = [];
+        floatingScores = [];
+        gameOverEl.style.display = 'none';
+
+        // 既存のエンジンがあればクリア
+        if (engine) {
+            Matter.Runner.stop(runner);
+            Matter.Engine.clear(engine);
+        }
+
+        engine = Engine.create();
+        world = engine.world;
+        
+        // 物理演算の精度を上げる
+        engine.positionIterations = 8;
+        engine.velocityIterations = 6;
+
+        // 壁と床の作成 (Static)
+        const wallOptions = { 
+            isStatic: true, 
+            render: { fillStyle: 'transparent' }, 
+            friction: 0.3, 
+            restitution: 0.2
+        };
+        
+        const ground = Bodies.rectangle(WIDTH / 2, HEIGHT + WALL_THICKNESS/2 - 20, WIDTH + 200, WALL_THICKNESS, wallOptions);
+        const leftWall = Bodies.rectangle(0 - WALL_THICKNESS/2, HEIGHT / 2, WALL_THICKNESS, HEIGHT * 2, wallOptions);
+        const rightWall = Bodies.rectangle(WIDTH + WALL_THICKNESS/2, HEIGHT / 2, WALL_THICKNESS, HEIGHT * 2, wallOptions);
+
+        Composite.add(world, [ground, leftWall, rightWall]);
+
+        // 最初のフルーツセット
+        nextFruitLevel = getNextFruitLevel();
+        prepareNextDrop();
+
+        // 衝突イベント
+        Events.on(engine, 'collisionStart', handleCollision);
+
+        // 毎フレームの処理 (ゲームオーバー判定など)
+        Events.on(engine, 'beforeUpdate', checkGameOver);
+
+        runner = Runner.create();
+        Runner.run(runner, engine);
+
+        // 描画ループ開始
+        requestAnimationFrame(renderLoop);
+    }
+
+    // 次のフルーツ落下準備
+    function prepareNextDrop() {
+        const level = nextFruitLevel;
+        nextFruitLevel = getNextFruitLevel();
+        nextFruitEl.innerText = FRUITS[nextFruitLevel].emoji;
+
+        currentDroppingFruit = {
+            level: level,
+            radius: FRUITS[level].radius,
+            emoji: FRUITS[level].emoji
+        };
+        clampDropX();
+    }
+
+    // 落下位置が壁にめり込まないように制限
+    function clampDropX() {
+        if (!currentDroppingFruit) return;
+        const r = currentDroppingFruit.radius;
+        if (dropX < r + 10) dropX = r + 10;
+        if (dropX > WIDTH - r - 10) dropX = WIDTH - r - 10;
+    }
+
+    // フルーツを落とす
+    function dropFruit() {
+        if (!canDrop || isGameOver || !currentDroppingFruit) return;
+
+        canDrop = false;
+        
+        const level = currentDroppingFruit.level;
+        const fruitDef = FRUITS[level];
+        
+        // 物理ボディ作成
+        const fruitBody = Bodies.circle(dropX, 60, fruitDef.radius * 0.95, { // 衝突判定は少し小さめにするとはみ出しにくい
+            restitution: 0.25, // 反発係数(弾みやすさ)
+            friction: 0.3,    // 摩擦
+            density: 0.001 * (level + 1), // 大きいほど重くする
+            isSleeping: false
+        });
+
+        // カスタムプロパティ追加
+        fruitBody.fruitLevel = level;
+        fruitBody.hasMerged = false; // 二重合体防止フラグ
+        fruitBody.createdAt = Date.now(); // 生成時刻を記録（落下直後のゲームオーバー判定防止用）
+
+        Composite.add(world, fruitBody);
+        currentDroppingFruit = null;
+
+        // 次のフルーツ準備までのクールダウン
+        setTimeout(() => {
+            if (!isGameOver) {
+                prepareNextDrop();
+                canDrop = true;
+            }
+        }, 1000); // 1秒間隔
+    }
+
+    // 衝突時の処理 (フルーツの合体)
+    function handleCollision(event) {
+        const pairs = event.pairs;
+        
+        for (let i = 0; i < pairs.length; i++) {
+            const bodyA = pairs[i].bodyA;
+            const bodyB = pairs[i].bodyB;
+
+            // 両方がフルーツで、レベルが同じで、まだ合体処理されていない場合
+            if (bodyA.fruitLevel !== undefined && bodyB.fruitLevel !== undefined &&
+                bodyA.fruitLevel === bodyB.fruitLevel &&
+                !bodyA.hasMerged && !bodyB.hasMerged) {
+
+                const level = bodyA.fruitLevel;
+
+                // スイカ(最大レベル)同士は消滅させるか、そのままにする
+                if (level >= FRUITS.length - 1) {
+                    continue; 
+                }
+
+                // マージフラグを立てる（同じフレームでの重複処理回避）
+                bodyA.hasMerged = true;
+                bodyB.hasMerged = true;
+
+                const nextLevel = level + 1;
+                const nextFruitDef = FRUITS[nextLevel];
+
+                // 中間位置を計算
+                const midX = (bodyA.position.x + bodyB.position.x) / 2;
+                const midY = (bodyA.position.y + bodyB.position.y) / 2;
+
+                // スコア加算
+                updateScore(nextFruitDef.score);
+
+                // エフェクト生成
+                createParticles(midX, midY, FRUITS[level].color);
+                createFloatingScore(midX, midY, nextFruitDef.score);
+
+                // 少し遅延させて削除と新規追加を行う (Matter.jsの物理計算安定のため)
+                setTimeout(() => {
+                    Composite.remove(world, [bodyA, bodyB]);
+
+                    // 新しい進化したフルーツを作成
+                    const newFruit = Bodies.circle(midX, midY, nextFruitDef.radius * 0.95, {
+                        restitution: 0.25,
+                        friction: 0.3,
+                        density: 0.001 * (nextLevel + 1)
+                    });
+                    newFruit.fruitLevel = nextLevel;
+                    newFruit.hasMerged = false;
+                    newFruit.createdAt = Date.now(); // 合体直後も判定から一時除外
+
+                    Composite.add(world, newFruit);
+                }, 0);
+            }
+        }
+    }
+
+    // ゲームオーバー判定
+    function checkGameOver() {
+        if (isGameOver) return;
+
+        let overLimit = false;
+        const bodies = Composite.allBodies(world);
+        const now = Date.now();
+        
+        for (let body of bodies) {
+            if (body.fruitLevel !== undefined) {
+                // 生成・合体直後（2秒以内）はゲームオーバー判定から除外する
+                if (body.createdAt && now - body.createdAt < 2000) {
+                    continue;
+                }
+
+                // フルーツがデッドラインを超えていて、かつ静止に近い状態か
+                if (body.position.y < DEADLINE_Y - (FRUITS[body.fruitLevel].radius * 0.8)) {
+                    if (Math.abs(body.velocity.y) < 0.2 && Math.abs(body.velocity.x) < 0.2) {
+                        overLimit = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (overLimit) {
+            triggerGameOver();
+        }
+    }
+
+    function triggerGameOver() {
+        isGameOver = true;
+        canDrop = false;
+        finalScoreEl.innerText = score;
+        
+        // アニメーション付きで表示
+        gameOverEl.style.display = 'flex';
+        gameOverEl.style.opacity = '0';
+        setTimeout(() => {
+            gameOverEl.style.transition = 'opacity 0.5s ease';
+            gameOverEl.style.opacity = '1';
+        }, 10);
+
+        currentDroppingFruit = null;
+    }
+
+    // --- 描画ループ ---
+    function renderLoop() {
+        if (!engine) return;
+
+        // 背景クリア
+        ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+        // ゲームエリアの背景（半透明）
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+        // デッドラインの描画 (上部の赤い点線)
+        ctx.beginPath();
+        ctx.moveTo(0, DEADLINE_Y);
+        ctx.lineTo(WIDTH, DEADLINE_Y);
+        ctx.setLineDash([8, 8]);
+        ctx.strokeStyle = 'rgba(255, 80, 80, 0.6)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.setLineDash([]); // リセット
+
+        // フルーツ（物理ボディ）の描画
+        const bodies = Composite.allBodies(world);
+        for (let body of bodies) {
+            if (body.fruitLevel !== undefined) {
+                drawFruit(body.position.x, body.position.y, body.angle, body.fruitLevel);
+            }
+        }
+
+        // 落下準備中のフルーツ描画
+        if (currentDroppingFruit && canDrop && !isGameOver) {
+            // 落下予測のガイドライン
+            ctx.beginPath();
+            ctx.moveTo(dropX, 60);
+            ctx.lineTo(dropX, HEIGHT);
+            ctx.setLineDash([5, 5]);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // プレビューフルーツ
+            drawFruit(dropX, 60, 0, currentDroppingFruit.level, 0.9);
+        }
+
+        // エフェクト描画
+        updateAndDrawParticles();
+        updateAndDrawFloatingScores();
+
+        // ループ継続
+        if (!isGameOver) {
+            requestAnimationFrame(renderLoop);
+        } else {
+            // ゲームオーバー時も描画を維持するためループは止めない
+            requestAnimationFrame(renderLoop);
+        }
+    }
+
+    // フルーツ（絵文字）の描画処理
+    function drawFruit(x, y, angle, level, alpha = 1.0) {
+        const def = FRUITS[level];
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        
+        ctx.globalAlpha = alpha;
+        ctx.font = `${def.radius * 1.8}px 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // ドロップシャドウで立体感を演出
+        ctx.shadowColor = 'rgba(0,0,0,0.3)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 4;
+
+        // 微調整: 絵文字によって中心が少しずれることがあるため、Y軸をわずかに補正
+        ctx.fillText(def.emoji, 0, def.radius * 0.1);
+        
+        ctx.restore();
+    }
+
+    // パーティクルの更新と描画
+    function updateAndDrawParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.3; // 重力
+            p.life -= 0.03; // 寿命
+
+            if (p.life <= 0) {
+                particles.splice(i, 1);
+            } else {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        ctx.globalAlpha = 1.0;
+    }
+
+    // フローティングスコア（+10など）の更新と描画
+    function updateAndDrawFloatingScores() {
+        for (let i = floatingScores.length - 1; i >= 0; i--) {
+            let fs = floatingScores[i];
+            fs.y += fs.vy;
+            fs.life -= 0.02;
+
+            if (fs.life <= 0) {
+                floatingScores.splice(i, 1);
+            } else {
+                ctx.globalAlpha = fs.life;
+                ctx.font = `bold 24px 'M PLUS Rounded 1c', sans-serif`;
+                ctx.fillStyle = '#ff4b2b';
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 3;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                ctx.strokeText(`+${fs.score}`, fs.x, fs.y);
+                ctx.fillText(`+${fs.score}`, fs.x, fs.y);
+            }
+        }
+        ctx.globalAlpha = 1.0;
+    }
+
+
+    // --- イベントリスナー ---
+
+    // PC用マウス操作
+    canvas.addEventListener('mousemove', (e) => {
+        if (!canDrop || isGameOver) return;
+        const rect = canvas.getBoundingClientRect();
+        // キャンバス内の相対X座標を計算し、内部解像度にスケール
+        const scaleX = canvas.width / rect.width;
+        dropX = (e.clientX - rect.left) * scaleX;
+        clampDropX();
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+        dropFruit();
+    });
+
+    // スマホ用タッチ操作
+    canvas.addEventListener('touchmove', (e) => {
+        if (!canDrop || isGameOver) return;
+        e.preventDefault(); // スクロール防止
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        const scaleX = canvas.width / rect.width;
+        dropX = (touch.clientX - rect.left) * scaleX;
+        clampDropX();
+    }, { passive: false });
+
+    canvas.addEventListener('touchstart', (e) => {
+        if (!canDrop || isGameOver) return;
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        const scaleX = canvas.width / rect.width;
+        dropX = (touch.clientX - rect.left) * scaleX;
+        clampDropX();
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+        if (!canDrop || isGameOver) return;
+        e.preventDefault();
+        dropFruit();
+    }, { passive: false });
+
+
+    // 初期化実行
+    window.onload = () => {
+        initGame();
+    };
+
+</script>
+</body>
+</html>
