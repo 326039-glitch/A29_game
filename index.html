@@ -195,6 +195,8 @@
     let canDrop = true;
     let particles = []; 
     let floatingScores = [];
+    let animationId = null;
+    let dropTimer = null;
 
     // DOM Elements
     const scoreEl = document.getElementById('score');
@@ -244,6 +246,8 @@
 
     // ゲーム初期化
     function initGame() {
+        cancelAnimationFrame(animationId);
+        clearTimeout(dropTimer);
         isGameOver = false;
         canDrop = true;
         score = 0;
@@ -293,7 +297,7 @@
         Runner.run(runner, engine);
 
         // 描画ループ開始
-        requestAnimationFrame(renderLoop);
+        animationId = requestAnimationFrame(renderLoop);
     }
 
     // 次のフルーツ落下準備
@@ -344,7 +348,7 @@
         currentDroppingFruit = null;
 
         // 次のフルーツ準備までのクールダウン
-        setTimeout(() => {
+        dropTimer = setTimeout(() => {
             if (!isGameOver) {
                 prepareNextDrop();
                 canDrop = true;
@@ -354,6 +358,7 @@
 
     // 衝突時の処理 (フルーツの合体)
     function handleCollision(event) {
+        if (isGameOver) return;
         const pairs = event.pairs;
         
         for (let i = 0; i < pairs.length; i++) {
@@ -391,7 +396,9 @@
                 createFloatingScore(midX, midY, nextFruitDef.score);
 
                 // 少し遅延させて削除と新規追加を行う (Matter.jsの物理計算安定のため)
+                const mergeWorld = world;
                 setTimeout(() => {
+                    if (isGameOver || world !== mergeWorld) return;
                     Composite.remove(world, [bodyA, bodyB]);
 
                     // 新しい進化したフルーツを作成
@@ -443,6 +450,8 @@
     function triggerGameOver() {
         isGameOver = true;
         canDrop = false;
+        Runner.stop(runner);
+        clearTimeout(dropTimer);
         finalScoreEl.innerText = score;
         
         // アニメーション付きで表示
@@ -506,12 +515,7 @@
         updateAndDrawFloatingScores();
 
         // ループ継続
-        if (!isGameOver) {
-            requestAnimationFrame(renderLoop);
-        } else {
-            // ゲームオーバー時も描画を維持するためループは止めない
-            requestAnimationFrame(renderLoop);
-        }
+        animationId = requestAnimationFrame(renderLoop);
     }
 
     // フルーツ（絵文字）の描画処理
